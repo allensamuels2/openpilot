@@ -8,6 +8,28 @@ from opendbc.can.parser import CANParser
 from selfdrive.config import Conversions as CV
 from selfdrive.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, NO_STOP_TIMER_CAR, TSS2_CAR, EPS_SCALE
 
+def _calculate_set_speed_offset_kph(v_cruise_kph):
+  offset = 0.0
+  debug_print = False
+  if v_cruise_kph <= 27 / CV.KPH_TO_MPH:
+    offset = 21 / CV.KPH_TO_MPH
+  elif v_cruise_kph <= 28 / CV.KPH_TO_MPH:
+    offset = 17 / CV.KPH_TO_MPH
+  elif v_cruise_kph <= 29 / CV.KPH_TO_MPH:
+    offset = 15 / CV.KPH_TO_MPH
+  elif v_cruise_kph <= 30 / CV.KPH_TO_MPH:
+    offset = 13 / CV.KPH_TO_MPH
+  elif v_cruise_kph <= 31 / CV.KPH_TO_MPH:
+    offset = 11 / CV.KPH_TO_MPH
+  elif v_cruise_kph <= 32 / CV.KPH_TO_MPH:
+    offset = 8 / CV.KPH_TO_MPH
+  elif v_cruise_kph <= 33 / CV.KPH_TO_MPH:
+    offset = 6 / CV.KPH_TO_MPH
+  elif v_cruise_kph <= 34 / CV.KPH_TO_MPH:
+    offset = 3 / CV.KPH_TO_MPH
+  if offset != 0.0 and debug_print:
+    print("Cruise: v_cruise_kph=",v_cruise_kph, " Offset=", offset)
+  return offset
 
 class CarState(CarStateBase):
   def __init__(self, CP):
@@ -93,6 +115,11 @@ class CarState(CarStateBase):
 
     if self.CP.carFingerprint in TSS2_CAR:
       self.acc_type = cp_cam.vl["ACC_CONTROL"]["ACC_TYPE"]
+
+    # Adjust Low Speed Cruise Control
+    v_cruise_kph = ret.cruiseState.speed / CV.KPH_TO_MS
+    self.set_speed_offset = _calculate_set_speed_offset_kph(v_cruise_kph) * CV.KPH_TO_MS
+    ret.cruiseState.speed = ret.cruiseState.speed - self.set_speed_offset
 
     # some TSS2 cars have low speed lockout permanently set, so ignore on those cars
     # these cars are identified by an ACC_TYPE value of 2.

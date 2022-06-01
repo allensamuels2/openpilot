@@ -112,6 +112,10 @@ void run_model(ModelState &model, VisionIpcClient &vipc_client, bool wide_camera
 }
 
 int main(int argc, char **argv) {
+  if (argc > 0) {
+    extern int dorkitUnitTest(int argc, char **argv);
+    return dorkitUnitTest(argc, argv);
+  }
   if (!Hardware::PC()) {
     int ret;
     ret = util::set_realtime_priority(54);

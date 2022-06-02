@@ -739,16 +739,16 @@ void dorkit(PubMaster& pm, MessageBuilder& omsg_builder, cereal::ModelDataV2::Bu
   }
 }
 
-#if defined(QCOM) || defined(QCOM2)
-
 void carState_listener() {
-  SubMaster sm({'carState'});
+  SubMaster sm({"carState"});
   while (true) {
     sm.update(100); // 100 milliSeconds between updates
-    fake.v = sm['carState']['vEgo'];
-    fake.a = sm['carState']['aEgo'];
+    fake.v = sm["carState"].getCarState().getVEgo();
+    fake.a = sm["carState"].getCarState().getAEgo();
   }
 }
+
+#if defined(QCOM) || defined(QCOM2)
 
 std::thread socket_listener_thread;
 std::thread carState_listener_thread;

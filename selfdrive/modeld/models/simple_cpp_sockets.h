@@ -176,6 +176,11 @@ TCPServer::TCPServer(u_short port, const std::string& ip_address) : m_listen(Soc
 
 void Socket::bind() {
     std::cerr << "Binding to " << format() << "\n";
+    int flag = 1;
+    if (::setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag))) {
+        std::cerr << "setSockOpt failure, err=" << errno << "\n";
+        throw bind_err();
+    }
     if (::bind(m_socket, reinterpret_cast<sockaddr*>(&m_addr), sizeof(m_addr)) == SOCKET_ERROR) {
         throw bind_err();
     }

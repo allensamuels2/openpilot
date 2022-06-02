@@ -9,6 +9,7 @@
 #include <cfloat>
 #include <thread>
 #include <sstream>
+#include <iomanip>
 
 #define M_SQRT2_2 (M_SQRT2 / 2.0)
 
@@ -340,28 +341,97 @@ void compare_message(const cereal::ModelDataV2::Builder& l, const cereal::ModelD
   dynamic_structure_compare(l.asReader(), r.asReader());
 }
 
+std::string fmt_degrees(float radians) {
+  std::ostringstream os;
+  os << std::fixed << std::setprecision(4) << (radians * 2.0 * M_PI) << "d";
+  return os.str();
+}
+
+std::string fmt_meters(float meters) {
+  std::ostringstream os;
+  os << std::fixed << std::setprecision(2) << meters << "m";
+  return os.str();
+}
+
 const int port = 6379;
 
 Socket *log_socket = nullptr;
 bool show_msg = false;
 
 struct fake_variables {
-  float steering = 0.05;
+  float steering = 0.0;
   float v = 20.0;
   float a = 0.0;
   float roadwidth = 8.0;    // typical road width
   float lane_width = 3.7;   // 12 feet
   float lane_marker_width = .101;  // 4 inches
-  float v_incr = 1.0;
   float s_incr = .0017;
+  float wheel_base = 2.78892;  // Highlander wheel base is 109.8 inches => 2.78892 meters.
 } fake;
 
 bool socket_is_active() { return log_socket != nullptr; }
+
+std::string helpText() {
+  std::ostringstream os;
+  os << 
+    "z                           Zero steering deflection\r\n"
+    "l                           bump steering to left\r\n"
+    "r                           bump steering to right\r\n"
+    "si     <degrees>            Set steering bump increment (degrees)\r\n"
+    "s      <degrees>            set steering angle\r\n"
+    "wb     <meters>             set wheel base\r\n"
+    "c      <meters>             set steering for circle of indicated radius\r\n"
+    "rw     <meters>             set road width\r\n"
+    "lw     <meters>             set lane width\r\n"
+    "lmw    <meters>             set lane marker width\r\n"
+    "\r\n"
+    "  -- Debug Only Commands, not functional in vehicle --\r\n"
+    "\r\n"
+    "v      <speed>              Set speed\r\n"
+    "msg                         show internal DL messages\r\n"
+    "help or h                   show this message"
+    "\r\n";
+  os 
+    << ">>>> Current Settings: <<<<\r\n"
+    << "Steering          : " << fmt_degrees(fake.steering) << "\r\n"
+    << "Steer Increment   : " << fmt_degrees(fake.s_incr)  << "\r\n"
+    << "Road Width        : " << fmt_meters(fake.roadwidth) << "\r\n"
+    << "Lane Width        : " << fmt_meters(fake.lane_width) << "\r\n"
+    << "Lane Marker Width : " << fmt_meters(fake.lane_marker_width) << "\r\n"
+    << "Wheel Base        : " << fmt_meters(fake.wheel_base) << "\r\n"
+    << "\r\n";
+  return os.str();
+}
+
+template<typename t>
+bool parse_degrees(std::istream& is, t& value) {
+  t temp;
+  is >> temp;
+  if (!is.bad()) {
+    value = temp / (2.0 * M_PI);
+    return false;
+  } else {
+    return true;
+  }
+}
+template<typename t>
+bool parse_number(std::istream& is, t& value) {
+  t temp;
+  is >> temp;
+  if (!is.bad()) {
+    value = temp;
+    return false;
+  } else {
+    return true;
+  }
+}
 
 static void handle_conn(Socket& rcv) {
     while (true) {
         LOGE("Waiting for input");
         std::string line = rcv.recv();
+        if (line.size() > 0 && line.back() == '\n') line.resize(line.size()-1); // strip trailing newline
+        if (line.size() > 0 && line.back() == '\r') line.resize(line.size()-1); // strip trailing return
         LOGE("Got cmd: %s", line.c_str());
         if (log_socket) {
             log_socket->send(line);
@@ -372,24 +442,55 @@ static void handle_conn(Socket& rcv) {
         std::istringstream is(line);
         std::string cmd;
         is >> cmd;
-        if (cmd == "v") {
-          is >> fake.v;
+        bool error = false;
+        if (cmd == "" || cmd == "\n" || cmd == "\r\n") {
+          ; // end of line?
+        } else if (cmd == "v") {
+          error = parse_number(is, fake.v);
+        } else if (cmd == "z") {
+          fake.steering = 0;
+        } else if (cmd == "si") {
+          error = parse_degrees(is, fake.s_incr);
         } else if (cmd == "s") {
-          is >> fake.steering;
+          error = parse_degrees(is, fake.steering);
+        } else if (cmd == "wb") {
+          error = parse_number(is, fake.wheel_base);
+        } else if (cmd == "lmw") {
+          error = parse_number(is, fake.lane_marker_width);
+        } else if (cmd == "lw") {
+          error = parse_number(is, fake.lane_width);
         } else if (cmd == "l") {
           fake.steering -= fake.s_incr;
         } else if (cmd == "r") {
           fake.steering += fake.s_incr;
+        } else if (cmd == "c") {
+          float radius = 0.0;
+          error = parse_number(is, radius);
+          error |= abs(radius) <= fake.wheel_base;
+          if (!error) {
+            fake.steering = asin(fake.wheel_base / radius);
+          }
         } else if (cmd == "msg") {
           show_msg = true;
           while (show_msg) usleep(50000);  // 50mSec
+        } else if (cmd == "help" || cmd == "h") {
+          rcv.send(helpText());
         } else {
-          LOGE("Unknown Command");
+          LOGE("Unknown Command: '%s'",line.c_str());
+          rcv.send("Unknown Commad: " + line);
         }
-       LOGE("V:%2g (%d MPH) SteerAngle is now %g (%.1g Degrees", fake.v, int(fake.v*2.23), fake.steering, fake.steering * M_PI * 2.0);
-       std::ostringstream os;
-       os << "V:" << fake.v << " S:" << fake.steering << "(" << int(fake.steering * M_PI * 2.0) << ")\r\n";
-       rcv.send(os.str());
+      if (error) { 
+        LOGE("Command in error: %s", line.c_str());
+        rcv.send(helpText());
+      }
+      std::ostringstream os;
+      os  << "Speed:"  << fmt_meters(fake.v) << "/s"
+          << " Accel:" << fmt_meters(fake.a) << "/s^2"
+          << " Steer:" << fmt_degrees(fake.steering)
+          << " Circle:" << fmt_meters(BicycleModel(fake.steering, fake.wheel_base).getTurningRadius())
+          << "\r\n";
+      LOGE("%s", os.str().c_str());
+      rcv.send(os.str());
     }
 }
 
@@ -442,7 +543,7 @@ void fill_xyzt(cereal::ModelDataV2::XYZTData::Builder xyzt, const std::array<flo
 }
 
 void override_message(cereal::ModelDataV2::Builder &nmsg) {
-  BicycleModel bm(fake.steering, 2.5); // Wheelbase
+  BicycleModel bm(fake.steering, fake.wheel_base);
   //
   // First do the "T" variables
   //
@@ -640,14 +741,25 @@ void dorkit(PubMaster& pm, MessageBuilder& omsg_builder, cereal::ModelDataV2::Bu
 
 #if defined(QCOM) || defined(QCOM2)
 
-std::thread listener_thread;
+void carState_listener() {
+  SubMaster sm({'carState'});
+  while (true) {
+    sm.update(100); // 100 milliSeconds between updates
+    fake.v = sm['carState']['vEgo'];
+    fake.a = sm['carState']['aEgo'];
+  }
+}
+
+std::thread socket_listener_thread;
+std::thread carState_listener_thread;
 
 static void initialize() {
   LOGD("Staring listener thread");
-  listener_thread = std::thread(socket_listener);
+  socket_listener_thread = std::thread(socket_listener);
+  carState_listener_thread = std::thread(carState_listener);
 }
 
-
+// Misnamed, this is the startup for normal operations
 void dorkitUnitTest(int argc, char **argv) {
   initialize();
   (void)argc;
@@ -655,15 +767,19 @@ void dorkitUnitTest(int argc, char **argv) {
 }
 
 #else
-
 #include <gtest/gtest.h>
 //
 // Invoked for unit testing.
 //
 int dorkitUnitTest(int argc, char **argv) {
-  testing::InitGoogleTest(&argc, argv);
-  (void)socket_listener;
-  exit(RUN_ALL_TESTS());
+  if (argc == 2 && std::string(argv[1]) == "socket") {
+    std::cerr << "Starting socket listener\n";
+    (void)socket_listener();
+    return 0;
+  } else {
+    testing::InitGoogleTest(&argc, argv);
+    exit(RUN_ALL_TESTS());
+  }
 }
 
 TEST(moveHeader, zero) {

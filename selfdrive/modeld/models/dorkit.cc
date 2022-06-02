@@ -343,7 +343,7 @@ void compare_message(const cereal::ModelDataV2::Builder& l, const cereal::ModelD
 
 std::string fmt_degrees(float radians) {
   std::ostringstream os;
-  os << std::fixed << std::setprecision(4) << (radians * 2.0 * M_PI) << "d";
+  os << std::fixed << std::setprecision(4) << (radians / (M_PI / 180)) << "d";
   return os.str();
 }
 
@@ -374,6 +374,7 @@ bool socket_is_active() { return log_socket != nullptr; }
 std::string helpText() {
   std::ostringstream os;
   os << 
+    "\r\n"
     "z                           Zero steering deflection\r\n"
     "l                           bump steering to left\r\n"
     "r                           bump steering to right\r\n"
@@ -408,17 +409,17 @@ bool parse_degrees(std::istream& is, t& value) {
   t temp;
   is >> temp;
   if (!is.bad()) {
-    value = temp / (2.0 * M_PI);
+    value = temp * (M_PI / 180);
     return false;
   } else {
     return true;
   }
 }
 template<typename t>
-bool parse_number(std::istream& is, t& value) {
+bool parse_number(std::istream& is, t& value, t min_value = -std::numeric_limits<t>::infinity(), t max_value = std::numeric_limits<t>::infinity()) {
   t temp;
   is >> temp;
-  if (!is.bad()) {
+  if (!is.bad() && temp >= min_value && temp <= max_value) {
     value = temp;
     return false;
   } else {
@@ -446,7 +447,7 @@ static void handle_conn(Socket& rcv) {
         if (cmd == "" || cmd == "\n" || cmd == "\r\n") {
           ; // end of line?
         } else if (cmd == "v") {
-          error = parse_number(is, fake.v);
+          error = parse_number(is, fake.v, 0.f, 35.7f); // [0..100 MPH]
         } else if (cmd == "z") {
           fake.steering = 0;
         } else if (cmd == "si") {
@@ -454,11 +455,11 @@ static void handle_conn(Socket& rcv) {
         } else if (cmd == "s") {
           error = parse_degrees(is, fake.steering);
         } else if (cmd == "wb") {
-          error = parse_number(is, fake.wheel_base);
+          error = parse_number(is, fake.wheel_base, 1.0f, 10.0f);
         } else if (cmd == "lmw") {
-          error = parse_number(is, fake.lane_marker_width);
+          error = parse_number(is, fake.lane_marker_width, 0.f, 1.0f);
         } else if (cmd == "lw") {
-          error = parse_number(is, fake.lane_width);
+          error = parse_number(is, fake.lane_width, 2.0f, 10.0f);
         } else if (cmd == "l") {
           fake.steering -= fake.s_incr;
         } else if (cmd == "r") {
@@ -468,7 +469,7 @@ static void handle_conn(Socket& rcv) {
           error = parse_number(is, radius);
           error |= abs(radius) <= fake.wheel_base;
           if (!error) {
-            fake.steering = asin(fake.wheel_base / radius);
+            fake.steering = std::asin(fake.wheel_base / radius);
           }
         } else if (cmd == "msg") {
           show_msg = true;
@@ -476,11 +477,11 @@ static void handle_conn(Socket& rcv) {
         } else if (cmd == "help" || cmd == "h") {
           rcv.send(helpText());
         } else {
-          LOGE("Unknown Command: '%s'",line.c_str());
-          rcv.send("Unknown Commad: " + line);
+          LOGE("Unknown Command: '%s'\r\n",line.c_str());
+          rcv.send("Unknown Commad: " + line + "\r\n");
         }
       if (error) { 
-        LOGE("Command in error: %s", line.c_str());
+        LOGE("Command in error: %s\r\n", line.c_str());
         rcv.send(helpText());
       }
       std::ostringstream os;
@@ -730,8 +731,8 @@ void dorkit(PubMaster& pm, MessageBuilder& omsg_builder, cereal::ModelDataV2::Bu
     //
     fill_model(nmsg, net_outputs);
     override_message(nmsg);
-    compare_message(omsg, nmsg);
     if (show_msg) {
+      compare_message(omsg, nmsg);
       show_message(nmsg_builder, omsg_builder);
       show_msg = false;
     }

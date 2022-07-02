@@ -65,6 +65,12 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "In this mode openpilot will ignore lanelines and just drive how it thinks a human would.",
       "../assets/offroad/icon_road.png",
     },
+    {
+      "CruiseOverride",
+      "\U0001f96c Override Cruise Controls\U0001f96c",
+      "In this mode cruise control speeds at the low end are enabled.",
+      "../assets/offroad/icon_road.png",
+    },
 #ifdef ENABLE_MAPS
     {
       "NavSettingTime24h",

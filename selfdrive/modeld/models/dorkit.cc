@@ -103,6 +103,25 @@ struct UnitVector : public Vec2 {
   UnitVector() : Vec2(INFINITY, INFINITY) {}
 };
 
+double circleRadiusFromThreePoints(const Vec2 a, const Vec2 b, const Vec2 c) {
+    Vec2 d1 = Vec2(b.y - a.y, a.x - b.x);
+    Vec2 d2 = Vec2(c.y - a.y, a.x - c.x);
+    double k = d2.x * d1.y - d2.y * d1.x;
+    if (k > -0.00001 && k < 0.00001) {
+        return std::numeric_limits<double>::infinity();
+    }
+    Vec2 s1 = Vec2((a.x + b.x) / 2, (a.y + b.y) / 2);
+    Vec2 s2 = Vec2((a.x + c.x) / 2, (a.y + c.y) / 2);
+    double l = d1.x * (s2.y - s1.y) - d1.y * (s2.x - s1.x);
+    double m = l / k;
+    Vec2 center = Vec2(s2.x + m * d2.x, s2.y + m * d2.y);
+    double dx = center.x - a.x;
+    double dy = center.y - a.y;
+    double radius = sqrt(dx * dx + dy * dy);
+    return radius;
+  
+}
+
 Vec2 rotatePointAroundPoint(const Vec2& center, const Vec2& point, const UnitVector& angle) {
   Vec2 p(point - center); // Move to center
   Vec2 rotated((p.x * angle.cos()) - (p.y * angle.sin()), (p.x * angle.sin()) + (p.y * angle.cos()));
@@ -357,6 +376,7 @@ const int port = 6379;
 
 Socket *log_socket = nullptr;
 bool show_msg = false;
+std::atomic<unsigned> active_connections(0);
 
 struct fake_variables {
   float steering = 0.0;
@@ -369,7 +389,7 @@ struct fake_variables {
   float wheel_base = 2.78892;  // Highlander wheel base is 109.8 inches => 2.78892 meters.
 } fake;
 
-bool socket_is_active() { return log_socket != nullptr; }
+bool socket_is_active() { return active_connections != 0; }
 
 std::string helpText() {
   std::ostringstream os;
@@ -427,16 +447,16 @@ bool parse_number(std::istream& is, t& value, t min_value = -std::numeric_limits
   }
 }
 
-static void handle_conn(Socket& rcv) {
+static void handle_conn(Socket rcv) {
+  active_connections++;
+  try {
     while (true) {
-        LOGE("Waiting for input");
+        LOGE("Waiting for input on connection %s", rcv.format().c_str());
         std::string line = rcv.recv();
         if (line.size() > 0 && line.back() == '\n') line.resize(line.size()-1); // strip trailing newline
         if (line.size() > 0 && line.back() == '\r') line.resize(line.size()-1); // strip trailing return
         LOGE("Got cmd: %s", line.c_str());
-        if (log_socket) {
-            log_socket->send(line);
-        }
+        rcv.send(line);
         //
         // Execute command
         //
@@ -446,6 +466,8 @@ static void handle_conn(Socket& rcv) {
         bool error = false;
         if (cmd == "" || cmd == "\n" || cmd == "\r\n") {
           ; // end of line?
+        } else if (cmd == "q" || cmd == "quit") {
+          break;
         } else if (cmd == "v") {
           error = parse_number(is, fake.v, 0.f, 35.7f); // [0..100 MPH]
         } else if (cmd == "z") {
@@ -472,8 +494,10 @@ static void handle_conn(Socket& rcv) {
             fake.steering = std::asin(fake.wheel_base / radius);
           }
         } else if (cmd == "msg") {
+          log_socket = &rcv;
           show_msg = true;
           while (show_msg) usleep(50000);  // 50mSec
+          log_socket = nullptr;
         } else if (cmd == "help" || cmd == "h") {
           rcv.send(helpText());
         } else {
@@ -493,6 +517,10 @@ static void handle_conn(Socket& rcv) {
       LOGE("%s", os.str().c_str());
       rcv.send(os.str());
     }
+  } catch(recv_err) {
+    LOGE(("Closing socket" + rcv.format()).c_str());
+  }
+  active_connections--;
 }
 
 static void socket_listener() {
@@ -507,15 +535,9 @@ static void socket_listener() {
     while (true) {
         LOGE("Waiting to connect on port %d", port);
         Socket rcv = server.accept();
-        LOGE("Got connection from %s",rcv.getpeername().c_str());
-        log_socket = &rcv;
-        try {
-            handle_conn(rcv);
-        } catch(recv_err) {
-          LOGE("Receive error");
-        }
-        show_msg = false;
-        log_socket = nullptr;
+        LOGE("Got connection %s",rcv.format().c_str());
+        std::thread handler(handle_conn, rcv);
+        handler.detach();
     }
 }
 
@@ -975,6 +997,11 @@ TEST(build, with_zeros) {
 
   EXPECT_EQ(0, nmsg.getFrameId());
   EXPECT_EQ(0, nmsg.getFrameAge());
+}
+
+TEST(build, radius) {
+  double r = circleRadiusFromThreePoints(Vec2(-1.0,0.0), Vec2(0.0,1.0), Vec2(1.0, 0.0));
+  EXPECT_DOUBLE_EQ(r, 1.0);
 }
 
 #endif

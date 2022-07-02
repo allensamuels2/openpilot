@@ -49,13 +49,13 @@ public:
     Socket& operator=(const Socket& s) {
         m_socket = s.m_socket;
         m_addr   = s.m_addr;
-        const_cast<Socket&>(s).m_socket = 0;
+        const_cast<Socket&>(s).m_socket = -1;
         return *this;
     }
     Socket(const Socket& s) {
         m_socket = s.m_socket;
         m_addr   = s.m_addr;
-        const_cast<Socket&>(s).m_socket = 0;
+        const_cast<Socket&>(s).m_socket = -1;
     }
     void bind();
     enum class SocketType {
@@ -67,7 +67,9 @@ public:
     explicit Socket(SocketType socket_type = SocketType::TYPE_DGRAM);
     Socket accept();
     std::string format() const {
-        return ipname(m_addr) + ":" + std::to_string(ntohs(m_addr.sin_port));
+        std::ostringstream os;
+        os << ipname(m_addr) << ":" << ntohs(m_addr.sin_port) << "(" << m_socket << ")";
+        return os.str();
     }
     std::string getpeername() const {
         sockaddr_in addr;
@@ -164,6 +166,7 @@ std::string Socket::recv() {
     char server_reply[20000];
     int result = ::recv(m_socket, server_reply, sizeof(server_reply), 0);
     if (result == SOCKET_ERROR || result == 0) {
+        std::cerr << "RECV ERROR result " << result << " or " << errno << " or " << strerror(errno) << "\n";
         throw recv_err();
     }
     return std::string(server_reply, result);
@@ -195,7 +198,7 @@ Socket Socket::accept() {
     SOCKET new_socket;
     new_socket = ::accept(m_socket, reinterpret_cast<sockaddr*>(&client), &client_size);
     if (new_socket == INVALID_SOCKET) {
-        std::cout << "Accept error " << errno << ":" << strerror(errno) << " Socket:" << m_socket << "\n";
+        //std::cout << "Accept error " << errno << ":" << strerror(errno) << " Socket:" << m_socket << "\n";
         throw accept_err();
     }
     Socket s(new_socket, client);

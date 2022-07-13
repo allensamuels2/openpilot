@@ -518,9 +518,30 @@ bool parse_number(std::istream& is, t& value, t min_value = -std::numeric_limits
   }
 }
 
+static void show_status(Socket &rcv) {
+      std::ostringstream os;
+      os  << "Speed:"  << fmt_meters(fake.v) << "/s"
+          << " Accel:" << fmt_meters(fake.a) << "/s^2"
+          << " Steer:" << fmt_degrees(fake.steering)
+          << " Circle:" << fmt_meters(BicycleModel(fake.steering, fake.wheel_base).getTurningRadius())
+          << "\r\n";
+      LOGE("%s", os.str().c_str());
+      rcv.send(os.str());
+}
+
+static void status_ticker() {
+  while (true) {
+    usleep(10000); // 10 seconds
+    if (log_socket) {
+      show_status(*log_socket);
+    }
+  }
+}
+
 static void handle_conn(Socket rcv) {
   intialize_correction_table();
   active_connections++;
+  log_socket = &rcv;
   try {
     while (true) {
         LOGE("Waiting for input on connection %s", rcv.format().c_str());
@@ -594,10 +615,8 @@ static void handle_conn(Socket rcv) {
         } else if (cmd == "rt") {
           intialize_correction_table();
         } else if (cmd == "msg") {
-          log_socket = &rcv;
           show_msg = true;
           while (show_msg) usleep(50000);  // 50mSec
-          log_socket = nullptr;
         } else if (cmd == "help" || cmd == "h") {
           rcv.send(helpText());
         } else {
@@ -608,19 +627,13 @@ static void handle_conn(Socket rcv) {
         LOGE("Command in error: %s\r\n", line.c_str());
         rcv.send(helpText());
       }
-      std::ostringstream os;
-      os  << "Speed:"  << fmt_meters(fake.v) << "/s"
-          << " Accel:" << fmt_meters(fake.a) << "/s^2"
-          << " Steer:" << fmt_degrees(fake.steering)
-          << " Circle:" << fmt_meters(BicycleModel(fake.steering, fake.wheel_base).getTurningRadius())
-          << "\r\n";
-      LOGE("%s", os.str().c_str());
-      rcv.send(os.str());
+      show_status(rcv);
     }
   } catch(recv_err) {
     LOGE(("Closing socket" + rcv.format()).c_str());
   }
   active_connections--;
+  log_socket = nullptr;
 }
 
 static void socket_listener() {
@@ -878,11 +891,13 @@ void carState_listener() {
 
 std::thread socket_listener_thread;
 std::thread carState_listener_thread;
+std::thread status_ticker_thread;
 
 static void initialize() {
   LOGD("Staring listener thread");
   socket_listener_thread = std::thread(socket_listener);
   carState_listener_thread = std::thread(carState_listener);
+  status_ticker_thread = std::thread(status_ticker);
 }
 
 // Misnamed, this is the startup for normal operations
@@ -901,6 +916,7 @@ int dorkitUnitTest(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "socket") {
     std::cerr << "Starting socket listener\n";
     (void)socket_listener();
+    (void)&status_ticker;
     return 0;
   } else {
     testing::InitGoogleTest(&argc, argv);

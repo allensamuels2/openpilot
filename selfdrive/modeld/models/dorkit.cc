@@ -422,11 +422,11 @@ std::map<float, circle_correction> correction_table;
 
 void intialize_correction_table() {
   correction_table.clear();
-  correction_table[mph_to_ms(0)]  = circle_correction(.09636, 12.877); // Invented.
-  correction_table[mph_to_ms(6)]  = circle_correction(.09636, 12.877);
-  correction_table[mph_to_ms(11)] = circle_correction(.192, 5.1);
-  correction_table[mph_to_ms(14)] = circle_correction(.19908, 8.2407);
-  correction_table[mph_to_ms(17)] = circle_correction(.242285, 9.2);
+  correction_table[mph_to_ms(0)]  = circle_correction(10.37, -133.39); // Invented.
+  correction_table[mph_to_ms(6)]  = circle_correction(10.37, -133.39);
+  correction_table[mph_to_ms(11)] = circle_correction(5.205, -26.45);
+  correction_table[mph_to_ms(14)] = circle_correction(4.95, -36.44);
+  correction_table[mph_to_ms(17)] = circle_correction(4.099, -35.74);
   correction_table[mph_to_ms(30)] = circle_correction();
 }
 
@@ -1209,9 +1209,9 @@ TEST(build, right_pi_4) {
 //  check_xy(nmsg.getVelocity(), t_idxs_float, vel_x, vel_y, 2);
 }
 
-static void check_correction_table(float actual, float requested, float mph) {
+static void check_correction_table(float requested, float actual, float mph) {
   // std::cerr << "Doing Case: MPH:" << mph << " Actual:" << actual << " Requested:" << requested << " ms:" << mph_to_ms(mph) << "\n";
-  EXPECT_NEAR(actual, correct_circle_radius(mph_to_ms(mph), requested), .1*requested);
+  EXPECT_NEAR(actual, correct_circle_radius(mph_to_ms(mph), requested), .15*actual);
 }
 
 TEST(correction_table, identity) {

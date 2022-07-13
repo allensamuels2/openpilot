@@ -2,7 +2,7 @@ from cereal import car
 from common.numpy_fast import mean
 from common.filter_simple import FirstOrderFilter
 from common.realtime import DT_CTRL
-from common.params import Params
+# from common.params import Params
 from opendbc.can.can_define import CANDefine
 from selfdrive.car.interfaces import CarStateBase
 from opendbc.can.parser import CANParser
@@ -10,8 +10,8 @@ from selfdrive.config import Conversions as CV
 from selfdrive.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, NO_STOP_TIMER_CAR, TSS2_CAR, EPS_SCALE
 
 def _calculate_set_speed_offset_kph(v_cruise_kph):
-  if not Params().get_bool('CruiseOverride'): 
-    return 0.0
+#  if not Params().get_bool('CruiseOverride'): 
+#    return 0.0
   offset = 0.0
   debug_print = False
   if v_cruise_kph <= 27 / CV.KPH_TO_MPH:

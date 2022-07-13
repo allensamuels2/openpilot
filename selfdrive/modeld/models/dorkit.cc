@@ -531,7 +531,7 @@ static void show_status(Socket &rcv) {
 
 static void status_ticker() {
   while (true) {
-    usleep(10000); // 10 seconds
+    usleep(10000000); // 10 seconds
     if (log_socket) {
       show_status(*log_socket);
     }

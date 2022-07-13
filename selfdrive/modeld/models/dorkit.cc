@@ -211,6 +211,8 @@ struct BicycleModel {
   double getAccelerationAngle() const { return isStraight() ? 0.0 : m_rotation_angle + (m_steer_angle < 0 ? -M_PI_2 : M_PI_2); }
   UnitVector getAccelerationVector() const { return UnitVector(getAccelerationAngle()); }
 
+  double getSteerAngle() const { return m_steer_angle; }
+
 private:
   double m_steer_angle;
   double m_wheel_base;
@@ -246,7 +248,7 @@ struct T_variables {
     bike.setDistance(d);
 
     position = bike.getPosition();
-    velocity = bike.getRotationVector() * v_t;
+    velocity = bike.getRotationVector() * v_avg;
     if (std::isinf(bike.getTurningRadius()) || t == 0.0) {
       acceleration = UnitVector(0.0) * a;
       orientation = RPY(0.0, 0.0, 0.0);
@@ -254,10 +256,17 @@ struct T_variables {
     } else {
       // We just account for centripetal acceleration and ignore the linear acceleration component
       // Centripal = V**2 / r
-      double acceleration_magnitude = (v_t * v_t) / bike.getTurningRadius();
+      double acceleration_magnitude = (v_avg * v_avg) / bike.getTurningRadius();
       acceleration = bike.getAccelerationVector() * acceleration_magnitude;
       orientation = RPY(0.0, 0.0, bike.getRotationAngle());
-      orientationRate = RPY(0.0, 0.0, bike.getRotationAngle() / t);
+      //
+      // Compute the orientationRate (angular velocity). this is in Radians/second.
+      // orientationRate = 2 * PI * f
+      // where f is in units of circles / second => velocity / circumference
+      // W = 2 * PI * (V / (2 * PI * R)) => V / R
+      //
+      auto w = v_avg / bike.getTurningRadius();
+      orientationRate = RPY(0.0, 0.0, bike.getSteerAngle() < 0 ? -w : w);
     }
   }
 };
@@ -391,6 +400,64 @@ struct fake_variables {
 
 bool socket_is_active() { return active_connections != 0; }
 
+//
+// Circle translation table
+//
+class circle_correction {
+  float slope;
+  float intercept;
+public:
+  circle_correction(float _slope = 1.0f, float _intercept = 0.0f) : slope(_slope), intercept(_intercept) {}
+  float correct(float radius) {
+    return (radius * slope) + intercept;
+  }
+
+};
+
+float mph_to_ms(float mph) {
+  return mph * .44704;
+}
+
+std::map<float, circle_correction> correction_table;
+
+void intialize_correction_table() {
+  correction_table.clear();
+  correction_table[mph_to_ms(0)]  = circle_correction(.09636, 12.877); // Invented.
+  correction_table[mph_to_ms(6)]  = circle_correction(.09636, 12.877);
+  correction_table[mph_to_ms(11)] = circle_correction(.192, 5.1);
+  correction_table[mph_to_ms(14)] = circle_correction(.19908, 8.2407);
+  correction_table[mph_to_ms(17)] = circle_correction(.242285, 9.2);
+  correction_table[mph_to_ms(30)] = circle_correction();
+}
+
+float correct_circle_radius(float ms, float requested) {
+  if (correction_table.empty()) return requested;
+  if (ms <= correction_table.begin()->first) {
+    // <= first entry, no interpolation
+    return correction_table.begin()->second.correct(requested);
+  } else if (ms >= correction_table.rbegin()->first) {
+    // >= first entry, interpolate with unity
+    return correction_table.rbegin()->second.correct(requested);
+  } else {
+    auto high = correction_table.lower_bound(ms);
+    assert(high != correction_table.end());
+    assert(high != correction_table.begin());
+    auto low = std::prev(high);
+    assert(ms >= low->first);
+    assert(ms <= high->first);
+    auto diff = high->first - low->first;
+    assert(diff > 0.0);
+    auto alpha = (ms - low->first) / diff;
+    assert(alpha >= 0.0 && alpha <= 1.0);
+    // std::cerr << "low:" << low->first << " high:" << high->first << " diff:" << diff << " ms:" << ms << " alpha:" << alpha << "\n";
+    auto high_circle = high->second.correct(requested);
+    auto low_circle = low->second.correct(requested);
+    // std::cerr << "high_circle:" << high_circle << " low_circle:" << low_circle;
+    // std::cerr << " Result:" << ((1-alpha) * high_circle) + (alpha * low_circle) << "\n";
+    return ((1-alpha) * low_circle) + (alpha * high_circle);
+  }
+}
+
 std::string helpText() {
   std::ostringstream os;
   os << 
@@ -399,12 +466,16 @@ std::string helpText() {
     "l                           bump steering to left\r\n"
     "r                           bump steering to right\r\n"
     "si     <degrees>            Set steering bump increment (degrees)\r\n"
-    "s      <degrees>            set steering angle\r\n"
+    "s      <degrees>            set steering angle (uncorrected)\r\n"
+    "S      <degrees>            set steering angle (Corrected)\r\n"
     "wb     <meters>             set wheel base\r\n"
-    "c      <meters>             set steering for circle of indicated radius\r\n"
+    "c      <meters>             set steering for circle of indicated radius (Uncorrected)\r\n"
+    "C      <meters>             set steering for circle of indicated radius (Corrected)\r\n"
     "rw     <meters>             set road width\r\n"
     "lw     <meters>             set lane width\r\n"
     "lmw    <meters>             set lane marker width\r\n"
+    "ate    <mph> <slope> <offset>  add table entry\r\n"
+    "rt                          reset table\r\n"
     "\r\n"
     "  -- Debug Only Commands, not functional in vehicle --\r\n"
     "\r\n"
@@ -448,6 +519,7 @@ bool parse_number(std::istream& is, t& value, t min_value = -std::numeric_limits
 }
 
 static void handle_conn(Socket rcv) {
+  intialize_correction_table();
   active_connections++;
   try {
     while (true) {
@@ -476,6 +548,17 @@ static void handle_conn(Socket rcv) {
           error = parse_degrees(is, fake.s_incr);
         } else if (cmd == "s") {
           error = parse_degrees(is, fake.steering);
+        } else if (cmd == "S") {
+          float steer;
+          error = parse_degrees(is, steer);
+          //
+          // Convert to circle
+          //
+          if (!error) {
+            BicycleModel bm(steer, fake.wheel_base);
+            auto corrected_radius = correct_circle_radius(fake.v, bm.getTurningRadius());
+            fake.steering = std::asin(fake.wheel_base / corrected_radius);
+          }
         } else if (cmd == "wb") {
           error = parse_number(is, fake.wheel_base, 1.0f, 10.0f);
         } else if (cmd == "lmw") {
@@ -493,6 +576,23 @@ static void handle_conn(Socket rcv) {
           if (!error) {
             fake.steering = std::asin(fake.wheel_base / radius);
           }
+        } else if (cmd == "C") {
+          float radius = 0.0;
+          error = parse_number(is, radius);
+          error |= abs(radius) <= fake.wheel_base;
+          if (!error) {
+            fake.steering = std::asin(fake.wheel_base / correct_circle_radius(fake.v, radius));
+          }
+        } else if (cmd == "ate") {
+          float mph, slope, offset;
+          error = parse_number(is, mph);
+          error |= parse_number(is, slope);
+          error |= parse_number(is, offset);
+          if (!error) {
+            correction_table[mph_to_ms(mph)] = circle_correction(slope, offset);
+          }
+        } else if (cmd == "rt") {
+          intialize_correction_table();
         } else if (cmd == "msg") {
           log_socket = &rcv;
           show_msg = true;
@@ -565,7 +665,10 @@ void fill_xyzt(cereal::ModelDataV2::XYZTData::Builder xyzt, const std::array<flo
   xyzt.setZStd(to_kj_array_ptr(z_std));
 }
 
-void override_message(cereal::ModelDataV2::Builder &nmsg) {
+void override_message(
+                      cereal::ModelDataV2::Builder &nmsg, 
+                      const std::array<float, TRAJECTORY_SIZE> &t_idxs_float,
+                      const std::array<float, TRAJECTORY_SIZE> &x_idxs_float) {
   BicycleModel bm(fake.steering, fake.wheel_base);
   //
   // First do the "T" variables
@@ -577,7 +680,7 @@ void override_message(cereal::ModelDataV2::Builder &nmsg) {
       rot_rate_x, rot_rate_y, rot_rate_z;
 
   for (size_t i = 0; i < TRAJECTORY_SIZE; ++i) {
-    T_variables tv(T_IDXS_FLOAT[i], fake.v, fake.a, bm);
+    T_variables tv(t_idxs_float[i], fake.v, fake.a, bm);
     pos_x[i] = tv.position.x;
     pos_y[i] = tv.position.y;
     pos_z[i] = .1;
@@ -594,10 +697,10 @@ void override_message(cereal::ModelDataV2::Builder &nmsg) {
     rot_rate_y[i] = tv.orientationRate.pitch();
     rot_rate_z[i] = tv.orientationRate.yaw();
   }
-  fill_xyzt(nmsg.initPosition(), T_IDXS_FLOAT, pos_x, pos_y, pos_z, pos_x_std, pos_y_std, pos_z_std);
-  fill_xyzt(nmsg.initVelocity(), T_IDXS_FLOAT, vel_x, vel_y, vel_z);
-  fill_xyzt(nmsg.initOrientation(), T_IDXS_FLOAT, rot_x, rot_y, rot_z);
-  fill_xyzt(nmsg.initOrientationRate(), T_IDXS_FLOAT, rot_rate_x, rot_rate_y, rot_rate_z);
+  fill_xyzt(nmsg.initPosition(), t_idxs_float, pos_x, pos_y, pos_z, pos_x_std, pos_y_std, pos_z_std);
+  fill_xyzt(nmsg.initVelocity(), t_idxs_float, vel_x, vel_y, vel_z);
+  fill_xyzt(nmsg.initOrientation(), t_idxs_float, rot_x, rot_y, rot_z);
+  fill_xyzt(nmsg.initOrientationRate(), t_idxs_float, rot_rate_x, rot_rate_y, rot_rate_z);
 
   // lane lines
   std::array<float, TRAJECTORY_SIZE> left_far_y, left_far_z;
@@ -608,7 +711,7 @@ void override_message(cereal::ModelDataV2::Builder &nmsg) {
   std::array<float, TRAJECTORY_SIZE> left_y, left_z;
   std::array<float, TRAJECTORY_SIZE> right_y, right_z;
   for (size_t j = 0; j < TRAJECTORY_SIZE; ++j) {
-    X_variables xv(X_IDXS_FLOAT[j], fake.v, fake.a, bm, fake.roadwidth, fake.lane_width, fake.lane_marker_width);
+    X_variables xv(x_idxs_float[j], fake.v, fake.a, bm, fake.roadwidth, fake.lane_width, fake.lane_marker_width);
     // Lane lines
     left_far_y[j] = xv.laneLines[0].y;
     left_far_z[j] = xv.laneLines[0].z;
@@ -625,17 +728,17 @@ void override_message(cereal::ModelDataV2::Builder &nmsg) {
     right_z[j] = xv.roadEdges[1].z;
   }
   auto lane_lines = nmsg.initLaneLines(4);
-  fill_xyzt(lane_lines[0], T_IDXS_FLOAT, X_IDXS_FLOAT, left_far_y, left_far_z);
-  fill_xyzt(lane_lines[1], T_IDXS_FLOAT, X_IDXS_FLOAT, left_near_y, left_near_z);
-  fill_xyzt(lane_lines[2], T_IDXS_FLOAT, X_IDXS_FLOAT, right_near_y, right_near_z);
-  fill_xyzt(lane_lines[3], T_IDXS_FLOAT, X_IDXS_FLOAT, right_far_y, right_far_z);
+  fill_xyzt(lane_lines[0], t_idxs_float, x_idxs_float, left_far_y, left_far_z);
+  fill_xyzt(lane_lines[1], t_idxs_float, x_idxs_float, left_near_y, left_near_z);
+  fill_xyzt(lane_lines[2], t_idxs_float, x_idxs_float, right_near_y, right_near_z);
+  fill_xyzt(lane_lines[3], t_idxs_float, x_idxs_float, right_far_y, right_far_z);
   nmsg.setLaneLineStds({0.0, 0.0, 0.0, 0.0});
   auto s = sigmoid(1.0);
   nmsg.setLaneLineProbs({s, s, s, s});
   // road edges
   auto road_edges = nmsg.initRoadEdges(2);
-  fill_xyzt(road_edges[0], T_IDXS_FLOAT, X_IDXS_FLOAT, left_y, left_z);
-  fill_xyzt(road_edges[1], T_IDXS_FLOAT, X_IDXS_FLOAT, right_y, right_z);
+  fill_xyzt(road_edges[0], t_idxs_float, x_idxs_float, left_y, left_z);
+  fill_xyzt(road_edges[1], t_idxs_float, x_idxs_float, right_y, right_z);
   nmsg.setRoadEdgeStds({1.0, 1.0});
 }
 
@@ -752,7 +855,7 @@ void dorkit(PubMaster& pm, MessageBuilder& omsg_builder, cereal::ModelDataV2::Bu
     // Construct the new message
     //
     fill_model(nmsg, net_outputs);
-    override_message(nmsg);
+    override_message(nmsg, T_IDXS_FLOAT, X_IDXS_FLOAT);
     if (show_msg) {
       compare_message(omsg, nmsg);
       show_message(nmsg_builder, omsg_builder);
@@ -935,7 +1038,9 @@ TEST(T_vars, one_45_left) { // 45 to the right, one unit
   EXPECT_EQ(tv.velocity, UnitVector(-M_PI_4) * v);
   EXPECT_EQ(tv.acceleration, UnitVector(3 * -M_PI_4) * (v * v / b.getTurningRadius()));
   EXPECT_EQ(tv.orientation, RPY(0.0, 0.0, -M_PI_4));
-  EXPECT_EQ(tv.orientationRate, RPY(0.0, 0.0, -M_PI_4));
+  EXPECT_EQ(tv.orientationRate.roll(), 0.0);
+  EXPECT_EQ(tv.orientationRate.pitch(), 0.0);
+  EXPECT_NEAR(tv.orientationRate.yaw(), -M_PI_4, .01);
 }
 
 TEST(intersect, straight_zero) {
@@ -1004,4 +1109,139 @@ TEST(build, radius) {
   EXPECT_DOUBLE_EQ(r, 1.0);
 }
 
+static void check_xy(cereal::ModelDataV2::XYZTData::Builder xyzt, 
+              const std::array<float, TRAJECTORY_SIZE> &t,
+              const std::array<float, TRAJECTORY_SIZE> &x, 
+              const std::array<float, TRAJECTORY_SIZE> &y,
+              size_t size = TRAJECTORY_SIZE) {
+  for (size_t i = 0; i < size; ++i) {
+    EXPECT_NEAR(t[i], xyzt.getT()[i], .000001) << "Failed T @ " << i;
+    EXPECT_NEAR(x[i], xyzt.getX()[i], .000001) << "Failed X @ " << i;
+    EXPECT_NEAR(y[i], xyzt.getY()[i], .000001) << "Failed Y @ " << i;
+  }
+}              
+
+TEST(build, full_msg_straight_ahead) {
+  MessageBuilder nmsg_builder;
+  cereal::ModelDataV2::Builder nmsg = nmsg_builder.initEvent(true).initModelV2();
+  std::array<float, TRAJECTORY_SIZE> t_idxs_float;
+  std::array<float, TRAJECTORY_SIZE> x_idxs_float;
+  for (size_t i = 0; i < TRAJECTORY_SIZE; ++i) {
+    t_idxs_float[i] = float(i);
+    x_idxs_float[i] = float(i);
+  }
+  fake.v = 1.0;
+  fake.a = 0.0;
+  fake.wheel_base = 1.0;
+  fake.steering = 0;
+  override_message(nmsg, t_idxs_float, x_idxs_float);
+  std::array<float, TRAJECTORY_SIZE> pos_x, pos_y, vel_x, vel_y;
+  for (size_t i = 0; i < TRAJECTORY_SIZE; ++i) {
+    pos_x[i] = i;
+    pos_y[i] = 0;
+    vel_x[i] = 1.0;
+    vel_y[i] = 0.0;
+  }
+  check_xy(nmsg.getPosition(), t_idxs_float, pos_x, pos_y);
+  check_xy(nmsg.getVelocity(), t_idxs_float, vel_x, vel_y);
+}
+
+Vec2 PointOnCircle(Vec2 center, float radius, float angle) {
+  return Vec2(center.x + (radius * cos(angle)),center.y + (radius * sin(angle)));
+}
+
+TEST(build, right_pi_4) {
+  MessageBuilder nmsg_builder;
+  cereal::ModelDataV2::Builder nmsg = nmsg_builder.initEvent(true).initModelV2();
+  std::array<float, TRAJECTORY_SIZE> t_idxs_float;
+  std::array<float, TRAJECTORY_SIZE> x_idxs_float;
+  for (size_t i = 0; i < TRAJECTORY_SIZE; ++i) {
+    t_idxs_float[i] = float(i);
+    x_idxs_float[i] = float(i);
+  }
+  //
+  // steer PI/4=>45deg => SQRT(2) turning radius.
+  // Thus circumference =2*sqr(2)*PI 
+  // To travel 1/4 of a circle in each timestep we set velocity = 
+  // circumference / 4
+  //
+  // Thus we have a turning circle of sqrt(2) radius, with a center of
+  // X=-1, Y=1 (-wheel_base, turning_center_y)
+  //
+  fake.v = (2 * M_SQRT2 * M_PI) / 4.0;
+  fake.a = 0.0;
+  fake.wheel_base = 1.0;
+  fake.steering = M_PI_4;
+  override_message(nmsg, t_idxs_float, x_idxs_float);
+  std::array<float, TRAJECTORY_SIZE> pos_x, pos_y, vel_x, vel_y;
+  for (size_t i = 0; i < 4 /*TRAJECTORY_SIZE*/; ++i) {
+    vel_x[i] = 1.0;
+    vel_y[i] = 0.0;
+  }
+  pos_x[0] = 0;
+  pos_y[0] = 0;
+  pos_x[1] = 0;
+  pos_y[1] = 2;
+  pos_x[2] = -2.0;
+  pos_y[2] = 2;
+  pos_x[3] = -2.0;
+  pos_y[3] = 0;
+  pos_x[4] = 0;
+  pos_y[4] = 0;
+
+  check_xy(nmsg.getPosition(), t_idxs_float, pos_x, pos_y, 5);
+//  check_xy(nmsg.getVelocity(), t_idxs_float, vel_x, vel_y, 2);
+}
+
+static void check_correction_table(float actual, float requested, float mph) {
+  // std::cerr << "Doing Case: MPH:" << mph << " Actual:" << actual << " Requested:" << requested << " ms:" << mph_to_ms(mph) << "\n";
+  EXPECT_NEAR(actual, correct_circle_radius(mph_to_ms(mph), requested), .1*requested);
+}
+
+TEST(correction_table, identity) {
+  intialize_correction_table();
+  check_correction_table(16.1, 35, 6);
+  check_correction_table(20.5, 75, 6);
+  check_correction_table(20.4, 75, 6);
+  check_correction_table(20.2, 75, 6);
+  check_correction_table(22.3, 100, 6);
+  check_correction_table(27.2, 150, 6);
+  check_correction_table(31.6, 200, 6);
+  check_correction_table(36.5, 250, 6);
+  check_correction_table(42.1, 300, 6);
+  check_correction_table(47.4, 350, 6);
+  check_correction_table(51.1, 400, 6);
+  check_correction_table(61, 500, 6);
+  check_correction_table(29.1, 125, 11);
+  check_correction_table(53.4, 250, 11);
+  check_correction_table(52.8, 250, 11);
+  check_correction_table(93, 500, 12);
+  check_correction_table(32.8, 125, 14);
+  check_correction_table(58.5, 250, 14);
+  check_correction_table(102.5, 500, 14);
+  check_correction_table(112.9, 500, 14);
+  check_correction_table(36.6, 125, 17);
+  check_correction_table(74.1, 250, 17);
+  check_correction_table(128.9, 500, 17);
+}
+
+TEST(correction_table, interpolation_within_same_mph) {
+  // Pick two radius and one velocity
+  auto low = correct_circle_radius(mph_to_ms(6), 100);
+  auto high = correct_circle_radius(mph_to_ms(6), 150);
+  auto mid = correct_circle_radius(mph_to_ms(6), 125);
+  EXPECT_NEAR(mid, (low+high)/2.0, mid*.05);
+}
+
+TEST(correction_table, interpolation_with_same_radius) {
+  // Pick one radius and two velocities
+  auto low = correct_circle_radius(mph_to_ms(14), 500);
+  auto high = correct_circle_radius(mph_to_ms(17), 500);
+  auto mid = correct_circle_radius((mph_to_ms(14) + mph_to_ms(17)) * 0.5, 500);
+  // std::cerr << "Low:" << low << " High:" << high << " mid:" << mid << "\n";
+  EXPECT_NEAR(mid, (low+high)/2.0, mid*.05);
+
+  auto one_quarter = correct_circle_radius(.75*mph_to_ms(14) + .25*mph_to_ms(17), 500);
+  EXPECT_NEAR(one_quarter, .75*low+.25*high, mid*.05);
+}
 #endif

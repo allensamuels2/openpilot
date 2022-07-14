@@ -601,21 +601,13 @@ static void handle_conn(Socket rcv) {
           fake.steering -= fake.s_incr;
         } else if (cmd == "r") {
           fake.steering += fake.s_incr;
-        } else if (cmd == "c") {
+        } else if (cmd == "c" || cmd == "C") {
           float radius = 0.0;
           error = parse_number(is, radius);
           error |= abs(radius) <= fake.wheel_base;
           if (!error) {
             fake.steering = std::asin(fake.wheel_base / radius);
-            fake.autocorrect_steering = false;
-          }
-        } else if (cmd == "C") {
-          float radius = 0.0;
-          error = parse_number(is, radius);
-          error |= abs(radius) <= fake.wheel_base;
-          if (!error) {
-            fake.steering = std::asin(fake.wheel_base / correct_circle_radius(fake.v, radius));
-            fake.autocorrect_steering = true;
+            fake.autocorrect_steering = (cmd == "C");
           }
         } else if (cmd == "ate") {
           float mph, slope, offset;

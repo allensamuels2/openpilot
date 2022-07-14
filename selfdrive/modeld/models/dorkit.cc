@@ -389,6 +389,7 @@ std::atomic<unsigned> active_connections(0);
 
 struct fake_variables {
   float steering = 0.0;
+  bool  autocorrect_steering = true;
   float v = 20.0;
   float a = 0.0;
   float roadwidth = 8.0;    // typical road width
@@ -396,6 +397,7 @@ struct fake_variables {
   float lane_marker_width = .101;  // 4 inches
   float s_incr = .0017;
   float wheel_base = 2.78892;  // Highlander wheel base is 109.8 inches => 2.78892 meters.
+  float getCorrectedSteering() const;
 } fake;
 
 bool socket_is_active() { return active_connections != 0; }
@@ -458,6 +460,14 @@ float correct_circle_radius(float ms, float requested) {
   }
 }
 
+float fake_variables::getCorrectedSteering() const {
+  // Convert steering angle to radius.
+  if (!autocorrect_steering) return steering;
+  auto requested_radius = BicycleModel(steering, wheel_base).getTurningRadius();
+  auto corrected_radius = correct_circle_radius(v, requested_radius);
+  return std::asin(wheel_base / corrected_radius);
+}
+
 std::string helpText() {
   std::ostringstream os;
   os << 
@@ -485,12 +495,13 @@ std::string helpText() {
     "\r\n";
   os 
     << ">>>> Current Settings: <<<<\r\n"
-    << "Steering          : " << fmt_degrees(fake.steering) << "\r\n"
-    << "Steer Increment   : " << fmt_degrees(fake.s_incr)  << "\r\n"
-    << "Road Width        : " << fmt_meters(fake.roadwidth) << "\r\n"
-    << "Lane Width        : " << fmt_meters(fake.lane_width) << "\r\n"
-    << "Lane Marker Width : " << fmt_meters(fake.lane_marker_width) << "\r\n"
-    << "Wheel Base        : " << fmt_meters(fake.wheel_base) << "\r\n"
+    << "Steering           : " << fmt_degrees(fake.steering) << "\r\n"
+    << "Corrected Steering : " << fmt_degrees(fake.getCorrectedSteering()) << "\r\n"
+    << "Steer Increment    : " << fmt_degrees(fake.s_incr)  << "\r\n"
+    << "Road Width         : " << fmt_meters(fake.roadwidth) << "\r\n"
+    << "Lane Width         : " << fmt_meters(fake.lane_width) << "\r\n"
+    << "Lane Marker Width  : " << fmt_meters(fake.lane_marker_width) << "\r\n"
+    << "Wheel Base         : " << fmt_meters(fake.wheel_base) << "\r\n"
     << "\r\n";
   return os.str();
 }
@@ -522,8 +533,8 @@ static void show_status(Socket &rcv) {
       std::ostringstream os;
       os  << "Speed:"  << fmt_meters(fake.v) << "/s"
           << " Accel:" << fmt_meters(fake.a) << "/s^2"
-          << " Steer:" << fmt_degrees(fake.steering)
-          << " Circle:" << fmt_meters(BicycleModel(fake.steering, fake.wheel_base).getTurningRadius())
+          << " Steer:" << fmt_degrees(fake.getCorrectedSteering())
+          << " Circle:" << fmt_meters(BicycleModel(fake.getCorrectedSteering(), fake.wheel_base).getTurningRadius())
           << "\r\n";
       LOGE("%s", os.str().c_str());
       rcv.send(os.str());
@@ -596,6 +607,7 @@ static void handle_conn(Socket rcv) {
           error |= abs(radius) <= fake.wheel_base;
           if (!error) {
             fake.steering = std::asin(fake.wheel_base / radius);
+            fake.autocorrect_steering = false;
           }
         } else if (cmd == "C") {
           float radius = 0.0;
@@ -603,6 +615,7 @@ static void handle_conn(Socket rcv) {
           error |= abs(radius) <= fake.wheel_base;
           if (!error) {
             fake.steering = std::asin(fake.wheel_base / correct_circle_radius(fake.v, radius));
+            fake.autocorrect_steering = true;
           }
         } else if (cmd == "ate") {
           float mph, slope, offset;
@@ -682,7 +695,7 @@ void override_message(
                       cereal::ModelDataV2::Builder &nmsg, 
                       const std::array<float, TRAJECTORY_SIZE> &t_idxs_float,
                       const std::array<float, TRAJECTORY_SIZE> &x_idxs_float) {
-  BicycleModel bm(fake.steering, fake.wheel_base);
+  BicycleModel bm(fake.getCorrectedSteering(), fake.wheel_base);
   //
   // First do the "T" variables
   //

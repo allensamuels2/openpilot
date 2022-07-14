@@ -578,19 +578,9 @@ static void handle_conn(Socket rcv) {
           fake.steering = 0;
         } else if (cmd == "si") {
           error = parse_degrees(is, fake.s_incr);
-        } else if (cmd == "s") {
+        } else if (cmd == "s" || cmd == "S") {
           error = parse_degrees(is, fake.steering);
-        } else if (cmd == "S") {
-          float steer;
-          error = parse_degrees(is, steer);
-          //
-          // Convert to circle
-          //
-          if (!error) {
-            BicycleModel bm(steer, fake.wheel_base);
-            auto corrected_radius = correct_circle_radius(fake.v, bm.getTurningRadius());
-            fake.steering = std::asin(fake.wheel_base / corrected_radius);
-          }
+          fake.autocorrect_steering = (cmd == "S");
         } else if (cmd == "wb") {
           error = parse_number(is, fake.wheel_base, 1.0f, 10.0f);
         } else if (cmd == "lmw") {

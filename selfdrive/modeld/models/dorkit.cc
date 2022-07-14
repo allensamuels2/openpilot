@@ -465,7 +465,8 @@ float fake_variables::getCorrectedSteering() const {
   if (!autocorrect_steering) return steering;
   auto requested_radius = BicycleModel(steering, wheel_base).getTurningRadius();
   auto corrected_radius = correct_circle_radius(v, requested_radius);
-  return std::asin(wheel_base / corrected_radius);
+  auto angle = std::asin(wheel_base / corrected_radius);
+  return steering < 0 ? -angle : angle;
 }
 
 std::string helpText() {
@@ -533,6 +534,7 @@ static void show_status(Socket &rcv) {
       std::ostringstream os;
       os  << "Speed:"  << fmt_meters(fake.v) << "/s"
           << " Accel:" << fmt_meters(fake.a) << "/s^2"
+          << " RawSteer:" << fmt_degrees(fake.steering)
           << " Steer:" << fmt_degrees(fake.getCorrectedSteering())
           << " Circle:" << fmt_meters(BicycleModel(fake.getCorrectedSteering(), fake.wheel_base).getTurningRadius())
           << "\r\n";

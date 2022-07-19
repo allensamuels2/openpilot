@@ -720,6 +720,29 @@ void override_message(
   // road edges
   std::array<float, TRAJECTORY_SIZE> left_y, left_z;
   std::array<float, TRAJECTORY_SIZE> right_y, right_z;
+  // compute the "T" values for each X index
+  std::array<float, TRAJECTORY_SIZE> plan_t;
+  std::fill_n(plan_t.data(), plan_t.size(), NAN);
+  plan_t[0] = 0.0;
+  for (int xidx=1, tidx=0; xidx<TRAJECTORY_SIZE; xidx++) {
+    // increment tidx until we find an element that's further away than the current xidx
+    for (int next_tid = tidx + 1; next_tid < TRAJECTORY_SIZE && pos_x[next_tid] < X_IDXS[xidx]; next_tid++) {
+      tidx++;
+    }
+    if (tidx == TRAJECTORY_SIZE - 1) {
+      // if the Plan doesn't extend far enough, set plan_t to the max value (10s), then break
+      plan_t[xidx] = T_IDXS[TRAJECTORY_SIZE - 1];
+      break;
+    }
+
+    // interpolate to find `t` for the current xidx
+    float current_x_val = pos_x[tidx];
+    float next_x_val = pos_x[tidx+1];
+    float p = (X_IDXS[xidx] - current_x_val) / (next_x_val - current_x_val);
+    plan_t[xidx] = p * T_IDXS[tidx+1] + (1 - p) * T_IDXS[tidx];
+  }
+
+
   for (size_t j = 0; j < TRAJECTORY_SIZE; ++j) {
     X_variables xv(x_idxs_float[j], fake.v, fake.a, bm, fake.roadwidth, fake.lane_width, fake.lane_marker_width);
     // Lane lines
@@ -738,17 +761,17 @@ void override_message(
     right_z[j] = xv.roadEdges[1].z;
   }
   auto lane_lines = nmsg.initLaneLines(4);
-  fill_xyzt(lane_lines[0], t_idxs_float, x_idxs_float, left_far_y, left_far_z);
-  fill_xyzt(lane_lines[1], t_idxs_float, x_idxs_float, left_near_y, left_near_z);
-  fill_xyzt(lane_lines[2], t_idxs_float, x_idxs_float, right_near_y, right_near_z);
-  fill_xyzt(lane_lines[3], t_idxs_float, x_idxs_float, right_far_y, right_far_z);
+  fill_xyzt(lane_lines[0], plan_t, x_idxs_float, left_far_y, left_far_z);
+  fill_xyzt(lane_lines[1], plan_t, x_idxs_float, left_near_y, left_near_z);
+  fill_xyzt(lane_lines[2], plan_t, x_idxs_float, right_near_y, right_near_z);
+  fill_xyzt(lane_lines[3], plan_t, x_idxs_float, right_far_y, right_far_z);
   nmsg.setLaneLineStds({0.0, 0.0, 0.0, 0.0});
   auto s = sigmoid(1.0);
   nmsg.setLaneLineProbs({s, s, s, s});
   // road edges
   auto road_edges = nmsg.initRoadEdges(2);
-  fill_xyzt(road_edges[0], t_idxs_float, x_idxs_float, left_y, left_z);
-  fill_xyzt(road_edges[1], t_idxs_float, x_idxs_float, right_y, right_z);
+  fill_xyzt(road_edges[0], plan_t, x_idxs_float, left_y, left_z);
+  fill_xyzt(road_edges[1], plan_t, x_idxs_float, right_y, right_z);
   nmsg.setRoadEdgeStds({1.0, 1.0});
 }
 

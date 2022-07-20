@@ -556,6 +556,7 @@ static void handle_conn(Socket rcv) {
   active_connections++;
   log_socket = &rcv;
   try {
+    show_status(rcv);
     while (true) {
         LOGE("Waiting for input on connection %s", rcv.format().c_str());
         std::string line = rcv.recv();

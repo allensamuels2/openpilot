@@ -197,7 +197,7 @@ Socket Socket::accept() {
         throw accept_err();
     }
     int i = 1;
-    if (setsockopt( new_socket, IPPROTO_TCP, TCP_NODELAY, (void *)&i, sizeof(i))) {
+    if (::setsockopt( new_socket, IPPROTO_TCP, TCP_NODELAY, (void *)&i, sizeof(i))) {
         throw std::runtime_error("Can't set no-delay");
     }
     Socket s(new_socket, client);

@@ -560,8 +560,21 @@ static void process_cmd(Socket& rcv, std::string line) {
   //
   std::istringstream is(line);
   std::string cmd;
+  std::string prefix;
   is >> cmd;
   bool error = false;
+  //
+  // See if we have a prefix
+  //
+  if (!cmd.empty() && cmd[0] == '<') {
+    auto rbracket = cmd.find('>');
+    if (rbracket == std::string::npos) {
+      error = true;
+    } else {
+      prefix = cmd.substr(0, rbracket+1);
+      cmd = cmd.substr(rbracket+1);
+    }
+  }
   if (cmd == "" || cmd == "\n" || cmd == "\r\n") {
     ; // end of line?
   } else if (cmd == "q" || cmd == "quit") {
@@ -615,7 +628,15 @@ static void process_cmd(Socket& rcv, std::string line) {
   if (error) { 
     LOGE("Command in error: %s\r\n", line.c_str());
     rcv.send(helpText());
+  } else if (!prefix.empty()) {
+    rcv.send(prefix + "\r\n");
   }
+}
+
+static std::string strip_char(const std::string& inp, char c) {
+  std::string out;
+  for (auto i = 0; i < inp.length(); ++i) if (inp[i] != c) out += inp[i];
+  return out;
 }
 
 static void process_line(Socket& rcv, std::string& line) {
@@ -624,7 +645,8 @@ static void process_line(Socket& rcv, std::string& line) {
   //
   auto nl = line.find("\n");
   while (nl != std::string::npos) {
-    process_cmd(rcv, line.substr(0, nl));
+    auto cmd = line.substr(0, nl);
+    process_cmd(rcv, cmd);
     line = line.substr(nl+1);
     nl = line.find("\n");
   }
@@ -641,13 +663,7 @@ static void handle_conn(Socket rcv) {
     while (true) {
         LOGE("Waiting for input on connection %s", rcv.format().c_str());
         std::string chunk = rcv.recv();
-        command_line.append(chunk);
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        std::ostringstream os;
-        os << tv.tv_sec << std::setw(3) << std::setfill('0') << tv.tv_usec << ' ';
-        rcv.send(os.str() + chunk);
-        command_line += chunk;
+        command_line.append(strip_char(chunk,'\r'));
         process_line(rcv, command_line);
     }
   } catch(recv_err) {

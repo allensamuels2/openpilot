@@ -551,81 +551,98 @@ static void status_ticker() {
   }
 }
 
+static void process_cmd(Socket& rcv, std::string line) {
+  LOGE("Got cmd: %s", line.c_str());
+  //
+  // Execute command
+  //
+  std::istringstream is(line);
+  std::string cmd;
+  is >> cmd;
+  bool error = false;
+  if (cmd == "" || cmd == "\n" || cmd == "\r\n") {
+    ; // end of line?
+  } else if (cmd == "q" || cmd == "quit") {
+    ;
+  } else if (cmd == "v") {
+    error = parse_number(is, fake.v, 0.f, 35.7f); // [0..100 MPH]
+  } else if (cmd == "z") {
+    fake.steering = 0;
+  } else if (cmd == "si") {
+    error = parse_degrees(is, fake.s_incr);
+  } else if (cmd == "s" || cmd == "S") {
+    error = parse_degrees(is, fake.steering);
+    fake.autocorrect_steering = (cmd == "S");
+  } else if (cmd == "wb") {
+    error = parse_number(is, fake.wheel_base, 1.0f, 10.0f);
+  } else if (cmd == "lmw") {
+    error = parse_number(is, fake.lane_marker_width, 0.f, 1.0f);
+  } else if (cmd == "lw") {
+    error = parse_number(is, fake.lane_width, 2.0f, 10.0f);
+  } else if (cmd == "l") {
+    fake.steering -= fake.s_incr;
+  } else if (cmd == "r") {
+    fake.steering += fake.s_incr;
+  } else if (cmd == "c" || cmd == "C") {
+    float radius = 0.0;
+    error = parse_number(is, radius);
+    error |= abs(radius) <= fake.wheel_base;
+    if (!error) {
+      fake.steering = std::asin(fake.wheel_base / radius);
+      fake.autocorrect_steering = (cmd == "C");
+    }
+  } else if (cmd == "ate") {
+    float mph, slope, offset;
+    error = parse_number(is, mph);
+    error |= parse_number(is, slope);
+    error |= parse_number(is, offset);
+    if (!error) {
+      correction_table[mph_to_ms(mph)] = circle_correction(slope, offset);
+    }
+  } else if (cmd == "rt") {
+    intialize_correction_table();
+  } else if (cmd == "msg") {
+    show_msg = true;
+    while (show_msg) usleep(50000);  // 50mSec
+  } else if (cmd == "help" || cmd == "h") {
+    rcv.send(helpText());
+  } else {
+    LOGE("Unknown Command: '%s'\r\n",line.c_str());
+    rcv.send("Unknown Command: " + line + "\r\n");
+  }
+  if (error) { 
+    LOGE("Command in error: %s\r\n", line.c_str());
+    rcv.send(helpText());
+  }
+}
+
+static void process_line(Socket& rcv, std::string& line) {
+  //
+  // Parse line and execute
+  //
+  auto nl = line.find("\n");
+  while (nl != std::string::npos) {
+    process_cmd(rcv, line.substr(0, nl));
+    line = line.substr(nl+1);
+    nl = line.find("\n");
+  }
+  show_status(rcv);
+}
+
 static void handle_conn(Socket rcv) {
   intialize_correction_table();
   active_connections++;
   log_socket = &rcv;
+  std::string command_line;
   try {
     show_status(rcv);
     while (true) {
         LOGE("Waiting for input on connection %s", rcv.format().c_str());
-        std::string line = rcv.recv();
-        if (line.size() > 0 && line.back() == '\n') line.resize(line.size()-1); // strip trailing newline
-        if (line.size() > 0 && line.back() == '\r') line.resize(line.size()-1); // strip trailing return
-        LOGE("Got cmd: %s", line.c_str());
-        rcv.send(line);
-        //
-        // Execute command
-        //
-        std::istringstream is(line);
-        std::string cmd;
-        is >> cmd;
-        bool error = false;
-        if (cmd == "" || cmd == "\n" || cmd == "\r\n") {
-          ; // end of line?
-        } else if (cmd == "q" || cmd == "quit") {
-          break;
-        } else if (cmd == "v") {
-          error = parse_number(is, fake.v, 0.f, 35.7f); // [0..100 MPH]
-        } else if (cmd == "z") {
-          fake.steering = 0;
-        } else if (cmd == "si") {
-          error = parse_degrees(is, fake.s_incr);
-        } else if (cmd == "s" || cmd == "S") {
-          error = parse_degrees(is, fake.steering);
-          fake.autocorrect_steering = (cmd == "S");
-        } else if (cmd == "wb") {
-          error = parse_number(is, fake.wheel_base, 1.0f, 10.0f);
-        } else if (cmd == "lmw") {
-          error = parse_number(is, fake.lane_marker_width, 0.f, 1.0f);
-        } else if (cmd == "lw") {
-          error = parse_number(is, fake.lane_width, 2.0f, 10.0f);
-        } else if (cmd == "l") {
-          fake.steering -= fake.s_incr;
-        } else if (cmd == "r") {
-          fake.steering += fake.s_incr;
-        } else if (cmd == "c" || cmd == "C") {
-          float radius = 0.0;
-          error = parse_number(is, radius);
-          error |= abs(radius) <= fake.wheel_base;
-          if (!error) {
-            fake.steering = std::asin(fake.wheel_base / radius);
-            fake.autocorrect_steering = (cmd == "C");
-          }
-        } else if (cmd == "ate") {
-          float mph, slope, offset;
-          error = parse_number(is, mph);
-          error |= parse_number(is, slope);
-          error |= parse_number(is, offset);
-          if (!error) {
-            correction_table[mph_to_ms(mph)] = circle_correction(slope, offset);
-          }
-        } else if (cmd == "rt") {
-          intialize_correction_table();
-        } else if (cmd == "msg") {
-          show_msg = true;
-          while (show_msg) usleep(50000);  // 50mSec
-        } else if (cmd == "help" || cmd == "h") {
-          rcv.send(helpText());
-        } else {
-          LOGE("Unknown Command: '%s'\r\n",line.c_str());
-          rcv.send("Unknown Commad: " + line + "\r\n");
-        }
-      if (error) { 
-        LOGE("Command in error: %s\r\n", line.c_str());
-        rcv.send(helpText());
-      }
-      show_status(rcv);
+        std::string chunk = rcv.recv();
+        command_line.append(chunk);
+        rcv.send(chunk);
+        command_line += chunk;
+        process_line(rcv, command_line);
     }
   } catch(recv_err) {
     LOGE(("Closing socket" + rcv.format()).c_str());

@@ -99,12 +99,7 @@ protected:
         char tmp[100];
         return std::string(inet_ntop(AF_INET, &addr.sin_addr, tmp, sizeof(tmp)));
     }
-    explicit Socket(SOCKET socket, sockaddr_in addr) : m_socket(socket), m_addr(addr) {
-        int i = 1;
-        if (setsockopt( m_socket, IPPROTO_TCP, TCP_NODELAY, (void *)&i, sizeof(i))) {
-            throw std::runtime_error("Can't set no-delay");
-        }
-    }
+    explicit Socket(SOCKET socket, sockaddr_in addr) : m_socket(socket), m_addr(addr) { }
     SOCKET m_socket;
     sockaddr_in m_addr;
 #ifdef WIN32
@@ -200,6 +195,10 @@ Socket Socket::accept() {
     if (new_socket == INVALID_SOCKET) {
         //std::cout << "Accept error " << errno << ":" << strerror(errno) << " Socket:" << m_socket << "\n";
         throw accept_err();
+    }
+    int i = 1;
+    if (setsockopt( new_socket, IPPROTO_TCP, TCP_NODELAY, (void *)&i, sizeof(i))) {
+        throw std::runtime_error("Can't set no-delay");
     }
     Socket s(new_socket, client);
     std::cout << "Accepted connection on " << new_socket << " " << s.format() << "\n";

@@ -10,6 +10,8 @@
 #include <thread>
 #include <sstream>
 #include <iomanip>
+#include <sys/time.h>
+#include <iostream>
 
 #define M_SQRT2_2 (M_SQRT2 / 2.0)
 
@@ -640,7 +642,11 @@ static void handle_conn(Socket rcv) {
         LOGE("Waiting for input on connection %s", rcv.format().c_str());
         std::string chunk = rcv.recv();
         command_line.append(chunk);
-        rcv.send(chunk);
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        std::ostringstream os;
+        os << tv.tv_sec << std::setw(3) << std::setfill('0') << tv.tv_usec << ' ';
+        rcv.send(os.str() + chunk);
         command_line += chunk;
         process_line(rcv, command_line);
     }

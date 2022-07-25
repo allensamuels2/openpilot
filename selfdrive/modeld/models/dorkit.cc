@@ -390,7 +390,8 @@ bool show_msg = false;
 std::atomic<unsigned> active_connections(0);
 
 struct fake_variables {
-  float steering = 0.0;
+  float current_steering = 0.0;
+  float future_steering = 0.0;
   bool  autocorrect_steering = true;
   float v = 20.0;
   float a = 0.0;
@@ -400,6 +401,7 @@ struct fake_variables {
   float s_incr = .0017;
   float wheel_base = 2.78892;  // Highlander wheel base is 109.8 inches => 2.78892 meters.
   float getCorrectedSteering() const;
+  void updateCorrectedSteering();
 } fake;
 
 bool socket_is_active() { return active_connections != 0; }
@@ -464,11 +466,22 @@ float correct_circle_radius(float ms, float requested) {
 
 float fake_variables::getCorrectedSteering() const {
   // Convert steering angle to radius.
-  if (!autocorrect_steering) return steering;
-  auto requested_radius = BicycleModel(steering, wheel_base).getTurningRadius();
+  if (!autocorrect_steering) return current_steering;
+  auto requested_radius = BicycleModel(current_steering, wheel_base).getTurningRadius();
   auto corrected_radius = correct_circle_radius(v, requested_radius);
   auto angle = std::asin(wheel_base / corrected_radius);
-  return steering < 0 ? -angle : angle;
+  return current_steering < 0 ? -angle : angle;
+}
+
+void fake_variables::updateCorrectedSteering() {
+  // Move current_steering toward future_steering by no more than fake.s_incr
+  if (current_steering < future_steering) {
+    float diff = future_steering - current_steering;
+    current_steering += std::min(fake.s_incr, diff);
+  } else {
+    float diff = current_steering - future_steering;
+    current_steering -= std::min(fake.s_incr, diff);
+  }
 }
 
 std::string helpText() {
@@ -498,7 +511,8 @@ std::string helpText() {
     "\r\n";
   os 
     << ">>>> Current Settings: <<<<\r\n"
-    << "Steering           : " << fmt_degrees(fake.steering) << "\r\n"
+    << "Current Steering   : " << fmt_degrees(fake.current_steering) << "\r\n"
+    << "Future  Steering   : " << fmt_degrees(fake.future_steering) << "\r\n"
     << "Corrected Steering : " << fmt_degrees(fake.getCorrectedSteering()) << "\r\n"
     << "Steer Increment    : " << fmt_degrees(fake.s_incr)  << "\r\n"
     << "Road Width         : " << fmt_meters(fake.roadwidth) << "\r\n"
@@ -536,7 +550,8 @@ static void show_status(Socket &rcv) {
       std::ostringstream os;
       os  << "Speed:"  << fmt_meters(fake.v) << "/s"
           << " Accel:" << fmt_meters(fake.a) << "/s^2"
-          << " RawSteer:" << fmt_degrees(fake.steering)
+          << " RawSteer:" << fmt_degrees(fake.current_steering)
+          << " FutureSteer:" << fmt_degrees(fake.future_steering)
           << " Steer:" << fmt_degrees(fake.getCorrectedSteering())
           << " Circle:" << fmt_meters(BicycleModel(fake.getCorrectedSteering(), fake.wheel_base).getTurningRadius())
           << "\r\n";
@@ -582,12 +597,12 @@ static void process_cmd(Socket& rcv, std::string line) {
   } else if (cmd == "v") {
     error = parse_number(is, fake.v, 0.f, 35.7f); // [0..100 MPH]
   } else if (cmd == "z") {
-    fake.steering = 0;
+    fake.current_steering = fake.future_steering = 0;
   } else if (cmd == "si") {
     error = parse_degrees(is, fake.s_incr);
   } else if (cmd == "s" || cmd == "S") {
-    error = parse_degrees(is, fake.steering);
-    fake.autocorrect_steering = (cmd == "S");
+    error = parse_degrees(is, fake.future_steering);
+    if (!error)fake.autocorrect_steering = (cmd == "S");
   } else if (cmd == "wb") {
     error = parse_number(is, fake.wheel_base, 1.0f, 10.0f);
   } else if (cmd == "lmw") {
@@ -595,15 +610,15 @@ static void process_cmd(Socket& rcv, std::string line) {
   } else if (cmd == "lw") {
     error = parse_number(is, fake.lane_width, 2.0f, 10.0f);
   } else if (cmd == "l") {
-    fake.steering -= fake.s_incr;
+    fake.current_steering -= fake.s_incr;
   } else if (cmd == "r") {
-    fake.steering += fake.s_incr;
+    fake.current_steering += fake.s_incr;
   } else if (cmd == "c" || cmd == "C") {
     float radius = 0.0;
     error = parse_number(is, radius);
     error |= abs(radius) <= fake.wheel_base;
     if (!error) {
-      fake.steering = std::asin(fake.wheel_base / radius);
+      fake.future_steering = std::asin(fake.wheel_base / radius);
       fake.autocorrect_steering = (cmd == "C");
     }
   } else if (cmd == "ate") {
@@ -719,6 +734,7 @@ void override_message(
                       cereal::ModelDataV2::Builder &nmsg, 
                       const std::array<float, TRAJECTORY_SIZE> &t_idxs_float,
                       const std::array<float, TRAJECTORY_SIZE> &x_idxs_float) {
+  fake.updateCorrectedSteering();
   BicycleModel bm(fake.getCorrectedSteering(), fake.wheel_base);
   //
   // First do the "T" variables
@@ -1209,7 +1225,7 @@ TEST(build, full_msg_straight_ahead) {
   fake.v = 1.0;
   fake.a = 0.0;
   fake.wheel_base = 1.0;
-  fake.steering = 0;
+  fake.current_steering = 0;
   override_message(nmsg, t_idxs_float, x_idxs_float);
   std::array<float, TRAJECTORY_SIZE> pos_x, pos_y, vel_x, vel_y;
   for (size_t i = 0; i < TRAJECTORY_SIZE; ++i) {
@@ -1247,7 +1263,7 @@ TEST(build, right_pi_4) {
   fake.v = (2 * M_SQRT2 * M_PI) / 4.0;
   fake.a = 0.0;
   fake.wheel_base = 1.0;
-  fake.steering = M_PI_4;
+  fake.current_steering = M_PI_4;
   override_message(nmsg, t_idxs_float, x_idxs_float);
   std::array<float, TRAJECTORY_SIZE> pos_x, pos_y, vel_x, vel_y;
   for (size_t i = 0; i < 4 /*TRAJECTORY_SIZE*/; ++i) {

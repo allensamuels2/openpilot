@@ -193,6 +193,16 @@ def main(sm=None, pm=None):
         0.2 <= liveParameters.stiffnessFactor <= 5.0,
         min_sr <= liveParameters.steerRatio <= max_sr,
       ))
+      if not liveParameters.valid:
+            if not abs(liveParameters.angleOffsetAverageDeg) < 10.0:
+                print("**FAILED** AngleOffsetAverageDeg ! < 10.0",liveParameters.angleOffsetAverageDeg)
+            if not abs(liveParameters.angleOffsetDeg) < 10.0:
+                print("**FAILED** angleOffsetDeg ! < 10.0",liveParameters.angleOffsetDeg)
+            if not (0.2 <= liveParameters.stiffnessFactor <= 5.0):
+                print("**FAILED** Stiffness: ", liveParameters.stiffnessFactor)
+            if not (min_sr <= liveParameters.steerRatio <= max_sr):
+                print("**FAILED** SteerRatio:",liveParameters.steerRatio)
+
       liveParameters.steerRatioStd = float(P[States.STEER_RATIO])
       liveParameters.stiffnessFactorStd = float(P[States.STIFFNESS])
       liveParameters.angleOffsetAverageStd = float(P[States.ANGLE_OFFSET])

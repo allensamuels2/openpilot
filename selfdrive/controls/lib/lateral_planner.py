@@ -120,4 +120,6 @@ class LateralPlanner:
     lateralPlan.laneChangeState = self.DH.lane_change_state
     lateralPlan.laneChangeDirection = self.DH.lane_change_direction
 
+    lateralPlan.modelMonoTime =  sm.logMonoTime['modelV2'] # remnav
+
     pm.send('lateralPlan', plan_send)

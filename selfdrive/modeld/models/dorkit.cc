@@ -1207,9 +1207,9 @@ static void check_xy(cereal::ModelDataV2::XYZTData::Builder xyzt,
               const std::array<float, TRAJECTORY_SIZE> &y,
               size_t size = TRAJECTORY_SIZE) {
   for (size_t i = 0; i < size; ++i) {
-    EXPECT_NEAR(t[i], xyzt.getT()[i], .000001) << "Failed T @ " << i;
-    EXPECT_NEAR(x[i], xyzt.getX()[i], .000001) << "Failed X @ " << i;
-    EXPECT_NEAR(y[i], xyzt.getY()[i], .000001) << "Failed Y @ " << i;
+    EXPECT_NEAR(t[i], xyzt.getT()[i], .02) << "Failed T @ " << i;
+    EXPECT_NEAR(x[i], xyzt.getX()[i], .02) << "Failed X @ " << i;
+    EXPECT_NEAR(y[i], xyzt.getY()[i], .02) << "Failed Y @ " << i;
   }
 }              
 

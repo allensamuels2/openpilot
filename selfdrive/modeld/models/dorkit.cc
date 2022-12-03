@@ -399,7 +399,7 @@ struct fake_variables {
   float lane_width = 3.7;   // 12 feet
   float lane_marker_width = .101;  // 4 inches
   float s_incr = .0017;
-  float s_limit = .5;       // Maximum steering deflection
+  float s_limit = 0.244346;       // Maximum steering deflection
   float wheel_base = 2.78892;  // Highlander wheel base is 109.8 inches => 2.78892 meters.
   float getCorrectedSteering() const;
   void updateCorrectedSteering();

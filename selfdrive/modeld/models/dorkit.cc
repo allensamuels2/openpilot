@@ -399,6 +399,7 @@ struct fake_variables {
   float lane_width = 3.7;   // 12 feet
   float lane_marker_width = .101;  // 4 inches
   float s_incr = .0017;
+  float s_limit = .5;       // Maximum steering deflection
   float wheel_base = 2.78892;  // Highlander wheel base is 109.8 inches => 2.78892 meters.
   float getCorrectedSteering() const;
   void updateCorrectedSteering();
@@ -478,9 +479,11 @@ void fake_variables::updateCorrectedSteering() {
   if (current_steering < future_steering) {
     float diff = future_steering - current_steering;
     current_steering += std::min(fake.s_incr, diff);
+    current_steering = std::min(current_steering, fake.s_limit);
   } else {
     float diff = current_steering - future_steering;
     current_steering -= std::min(fake.s_incr, diff);
+    current_steering = std::max(current_steering, -fake.s_limit);
   }
 }
 
@@ -491,7 +494,6 @@ std::string helpText() {
     "z                           Zero steering deflection\r\n"
     "l                           bump steering to left\r\n"
     "r                           bump steering to right\r\n"
-    "si     <degrees>            Set steering bump increment (degrees)\r\n"
     "s      <degrees>            set steering angle (uncorrected)\r\n"
     "S      <degrees>            set steering angle (Corrected)\r\n"
     "wb     <meters>             set wheel base\r\n"
@@ -502,10 +504,13 @@ std::string helpText() {
     "lmw    <meters>             set lane marker width\r\n"
     "ate    <mph> <slope> <offset>  add table entry\r\n"
     "rt                          reset table\r\n"
+    "rl     <degrees/frame>      set steer increment (rate limit)\r\n"
+    "sl     <degrees>            set steer limit(+/- deflection limit)\r\n"
     "\r\n"
     "  -- Debug Only Commands, not functional in vehicle --\r\n"
     "\r\n"
     "v      <speed>              Set speed\r\n"
+    "time   <count>              Simulate <count> frame times\r\n"
     "msg                         show internal DL messages\r\n"
     "help or h                   show this message"
     "\r\n";
@@ -515,6 +520,7 @@ std::string helpText() {
     << "Future  Steering   : " << fmt_degrees(fake.future_steering) << "\r\n"
     << "Corrected Steering : " << fmt_degrees(fake.getCorrectedSteering()) << "\r\n"
     << "Steer Increment    : " << fmt_degrees(fake.s_incr)  << "\r\n"
+    << "Steer Limit        : " << fmt_degrees(fake.s_limit) << "\r\n"
     << "Road Width         : " << fmt_meters(fake.roadwidth) << "\r\n"
     << "Lane Width         : " << fmt_meters(fake.lane_width) << "\r\n"
     << "Lane Marker Width  : " << fmt_meters(fake.lane_marker_width) << "\r\n"
@@ -523,25 +529,29 @@ std::string helpText() {
   return os.str();
 }
 
+std::string parse_error;
+
 template<typename t>
-bool parse_degrees(std::istream& is, t& value) {
+bool parse_degrees(std::istream& is, t& value, std::string error_msg = "degrees") {
   t temp;
   is >> temp;
   if (!is.bad()) {
     value = temp * (M_PI / 180);
     return false;
   } else {
+    parse_error += error_msg;
     return true;
   }
 }
 template<typename t>
-bool parse_number(std::istream& is, t& value, t min_value = -std::numeric_limits<t>::infinity(), t max_value = std::numeric_limits<t>::infinity()) {
+bool parse_number(std::istream& is, t& value, t min_value = -std::numeric_limits<t>::infinity(), t max_value = std::numeric_limits<t>::infinity(), std::string error_msg = "number") {
   t temp;
   is >> temp;
   if (!is.bad() && temp >= min_value && temp <= max_value) {
     value = temp;
     return false;
   } else {
+    parse_error += error_msg;
     return true;
   }
 }
@@ -573,6 +583,7 @@ static void process_cmd(Socket& rcv, std::string line) {
   //
   // Execute command
   //
+  parse_error = "";
   std::istringstream is(line);
   std::string cmd;
   std::string prefix;
@@ -584,6 +595,7 @@ static void process_cmd(Socket& rcv, std::string line) {
   if (!cmd.empty() && cmd[0] == '<') {
     auto rbracket = cmd.find('>');
     if (rbracket == std::string::npos) {
+      parse_error = "Expecting suffix after prefix";
       error = true;
     } else {
       prefix = cmd.substr(0, rbracket+1);
@@ -598,7 +610,7 @@ static void process_cmd(Socket& rcv, std::string line) {
     error = parse_number(is, fake.v, 0.f, 35.7f); // [0..100 MPH]
   } else if (cmd == "z") {
     fake.current_steering = fake.future_steering = 0;
-  } else if (cmd == "si") {
+  } else if (cmd == "rl") {
     error = parse_degrees(is, fake.s_incr);
   } else if (cmd == "s" || cmd == "S") {
     error = parse_degrees(is, fake.future_steering);
@@ -613,6 +625,10 @@ static void process_cmd(Socket& rcv, std::string line) {
     fake.current_steering -= fake.s_incr;
   } else if (cmd == "r") {
     fake.current_steering += fake.s_incr;
+  } else if (cmd == "rl") {
+    error = parse_number(is, fake.s_incr, 0.0f, .01f);
+  } else if (cmd == "sl") {
+    error = parse_degrees(is, fake.s_limit);
   } else if (cmd == "c" || cmd == "C") {
     float radius = 0.0;
     error = parse_number(is, radius);
@@ -623,14 +639,23 @@ static void process_cmd(Socket& rcv, std::string line) {
     }
   } else if (cmd == "ate") {
     float mph, slope, offset;
-    error = parse_number(is, mph);
-    error |= parse_number(is, slope);
-    error |= parse_number(is, offset);
+    error = parse_number(is, mph, 0.f, 100.f, "mph");
+    error |= parse_number(is, slope, -100.f, 100.f, "slope");
+    error |= parse_number(is, offset, -100.f, 100.f, "offset");
     if (!error) {
       correction_table[mph_to_ms(mph)] = circle_correction(slope, offset);
     }
   } else if (cmd == "rt") {
     intialize_correction_table();
+  } else if (cmd == "time") {
+    size_t ticks;
+    error = parse_number(is, ticks, 0ul, 1000ul, "ticks");
+    if (!error) {
+      for (auto t = 0; t < ticks; ++t) {
+        fake.updateCorrectedSteering();
+      }
+      show_msg = true;
+    }
   } else if (cmd == "msg") {
     show_msg = true;
     while (show_msg) usleep(50000);  // 50mSec
@@ -641,7 +666,7 @@ static void process_cmd(Socket& rcv, std::string line) {
     rcv.send("Unknown Command: " + line + "\r\n");
   }
   if (error) { 
-    LOGE("Command in error: %s\r\n", line.c_str());
+    LOGE("Parse Error(%s) for command: %s",parse_error.c_str(), line.c_str());
     rcv.send(helpText());
   } else if (!prefix.empty()) {
     rcv.send(prefix + "\r\n");

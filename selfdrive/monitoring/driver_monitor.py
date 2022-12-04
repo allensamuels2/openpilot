@@ -179,6 +179,7 @@ class DriverStatus():
     pitch_error = 0 if pitch_error > 0 else abs(pitch_error) # no positive pitch limit
     yaw_error = abs(yaw_error)
 
+    return DistractedType.NOT_DISTRACTED
     if pitch_error > self.settings._POSE_PITCH_THRESHOLD*pose.cfactor_pitch or \
        yaw_error > self.settings._POSE_YAW_THRESHOLD*pose.cfactor_yaw:
       return DistractedType.BAD_POSE
